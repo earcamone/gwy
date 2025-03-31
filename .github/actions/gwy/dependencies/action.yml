@@ -1,0 +1,147 @@
+name: 'Dependencies Scan'
+description: 'Scans for outdated Go dependencies and optionally creates a PR with updates'
+
+inputs:
+  token:
+    description: 'Repository token for PR creation (required if create-pr is true)'
+    required: false
+
+  create-pr:
+    description: 'Create a PR with outdated dependency updates?'
+    required: true
+    default: 'true'
+
+outputs:
+  result:
+    description: 'Result of the action (success or failed)'
+    value: ${{ steps.check-dependencies.outputs.result }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Initialize Dependencies Scanning Environment
+      shell: bash
+      run: |
+        # Initialize Dependencies Scanning Environment
+        GWY_SUMMARY=$RUNNER_TEMP/summary.txt
+        echo -e "## Outdated Dependencies Scan\n" >> $GWY_SUMMARY
+
+        # set annotations reusable title
+        echo "GWY_TITLE=outdated dependencies scan" >> $GITHUB_ENV
+
+        # export reusable environments        
+        echo "GWY_SUMMARY=$GWY_SUMMARY" >> $GITHUB_ENV
+        echo "GWY_DEPENDENCIES_COUNT=0" >> $GITHUB_ENV
+        echo "GWY_ARTIFACT=$RUNNER_TEMP/dependencies-report.txt" >> $GITHUB_ENV
+        echo "GWY_BRANCH=$(git branch --show-current)" >> $GITHUB_ENV
+        sync
+
+    - name: Check Outdated Dependencies
+      id: check-dependencies
+      continue-on-error: true
+
+      # Allow pipeline to keep going on errors (+e)
+      shell: bash --noprofile --norc +e -o pipefail {0}
+      run: |
+        # Check Outdated Dependencies
+
+        # Update dependencies and tidy, suppress output
+        timeout $GWY_TIMEOUT_SECONDS sh -c "go get -u ./... 2>&1 | grep '^go: upgraded ' | sed 's/go: upgraded //'"
+        
+        # Save dependency updates found for report
+        GWY_DEPENDENCIES_FOUND=$(git diff -U0 go.mod | grep -E '^\-[^+-]')
+        
+        GWY_DEPENDENCIES_COUNT=$(echo "$GWY_DEPENDENCIES_FOUND" | wc -l)
+        echo "GWY_DEPENDENCIES_COUNT=$GWY_DEPENDENCIES_COUNT" >> $GITHUB_ENV
+        
+        # set action result based in outdated dependencies count
+        if [ "$GWY_DEPENDENCIES_COUNT" -ne 0 ]; then
+          echo "result=failed" >> $GITHUB_OUTPUT
+        else
+          echo "result=success" >> $GITHUB_OUTPUT
+        fi
+        
+        # Write diff to artifact
+        git diff go.mod > $GWY_ARTIFACT
+        
+        # remove go.mod changes if no pr creation was requested
+        if [ "${{ inputs.create-pr }}" != "true" ]; then
+          echo "unstaging changes"
+          git restore go.mod go.sum
+        fi
+        
+        # Enhance summary, annotations, and debug output
+        if [ $GWY_DEPENDENCIES_COUNT -ne 0 ]; then
+          # Error annotation with count
+          echo "::error title=$GWY_TITLE: $GWY_DEPENDENCIES_COUNT OUTDATED DEPENDENCIES!::check summary or artifact report for more more details"
+        
+          # Add to summary
+          echo "$GWY_DEPENDENCIES_FOUND" | sed 's/^/  /' >> $GWY_SUMMARY
+        
+        else
+          # Success annotation
+          echo "::notice title=$GWY_TITLE: dependencies up-to-date::code dependencies are up-to-date"
+        
+          # Add to summary
+          echo "  - dependencies up-to-date" >> $GWY_SUMMARY
+        fi
+        
+        cat $GWY_SUMMARY >> $GITHUB_STEP_SUMMARY
+        sync
+
+    - name: Create PR with Updates
+      id: create-pr
+      if: env.GWY_DEPENDENCIES_COUNT != '0' && inputs.create-pr == 'true'
+
+      continue-on-error: true
+      uses: peter-evans/create-pull-request@v5
+
+      with:
+        token: ${{ inputs.token }}
+        title: "[CI] Automatic outdated dependencies update"
+        body: "Automatic update of ${{ env.GWY_DEPENDENCIES_COUNT }} outdated dependencies"
+        commit-message: "[CI] automatic update of ${{ env.GWY_DEPENDENCIES_COUNT }} outdated dependencies"
+        branch: ${{ env.GWY_BRANCH }}-dependencies-fix
+
+    - name: Notify PR Creation Result
+      if: env.GWY_DEPENDENCIES_COUNT != '0' && inputs.create-pr == 'true'
+
+      # Allow pipeline to keep going on errors (+e)
+      shell: bash --noprofile --norc +e -o pipefail {0}
+      continue-on-error: true
+
+      run: |
+        # Check if PR was created successfully
+        if [ "${{ steps.create-pr.outcome }}" == "success" ]; then
+          echo "::notice title=$GWY_TITLE: PR created::PR with code outdated dependencies update created"
+        else
+          echo "::error title=$GWY_TITLE: ERROR CREATING PULL REQUEST::Failed to create PR with dependencies updates"
+        fi
+
+    - name: Upload Outdated Dependencies Report
+      if: env.GWY_DEPENDENCIES_COUNT != '0'
+      continue-on-error: true
+
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependencies-report
+        path: ${{ env.GWY_ARTIFACT }}
+
+    - name: Step Clean-Up
+      if: always()
+      shell: bash
+      run: |
+        # Dependencies Scanning Clean-Up
+
+        # remove temporary files
+        rm $GWY_SUMMARY
+        rm $GWY_ARTIFACT
+        
+        # Unset variables
+        unset GWY_TITLE
+        unset GWY_SUMMARY
+        unset GWY_ARTIFACT
+        unset GWY_PIPELINE_STATUS
+        unset GWY_TIMEOUT_SECONDS
+        unset GWY_DEPENDENCIES_FOUND
+        unset GWY_DEPENDENCIES_COUNT
