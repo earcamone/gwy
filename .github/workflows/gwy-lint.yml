@@ -1,0 +1,69 @@
+name: 'GWY/Run: Linting Scan'
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch'
+        required: true
+        default: '<CURRENT>'
+
+      go-version:
+        description: 'Go version'
+        required: true
+        default: '<CURRENT>'
+
+      timeout:
+        description: 'Timeout per step'
+        type: string
+        default: '5m'
+
+jobs:
+  gwy-golint:
+    name: code linting (golint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Branch
+        run: |
+          # Setting Workflow Main Configuration
+          
+          # fail fast if client forgot to configure GWY repo token
+          
+          if [ "${{ secrets.GWY_TOKEN_REPO }}" = "" ]; then
+            echo "::error title=configuration error::missing GWY_TOKEN_REPO repo access secret, please check installation section in documentation"
+            exit 1
+          fi
+
+          # process target workflow branch 
+          if [ "${{ inputs.branch }}" = "<CURRENT>" ]; then
+            echo "BRANCH=${{ github.ref }}" >> $GITHUB_ENV
+          else
+            echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+          fi
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.BRANCH }}
+          token: ${{ secrets.GWY_REPO_TOKEN }}
+
+      - name: Setup Environment
+        uses: ./.github/actions/gwy/setup
+        with:
+          timeout: ${{ inputs.timeout }}
+          go-version: ${{ inputs.go-version }}
+
+      - name: Run golint Check
+        id: check-linting
+        uses: ./.github/actions/gwy/golint
+        with:
+          token: ${{ secrets.GWY_REPO_TOKEN }}
+
+      - name: Workflow Result
+        shell: bash
+        run: |
+          # Process Workflow Result
+          if [ "${{ steps.check-linting.outputs.result }}" != "success" ]; then
+            exit 1
+          fi
