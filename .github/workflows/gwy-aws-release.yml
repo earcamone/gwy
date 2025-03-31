@@ -1,0 +1,144 @@
+name: 'GWY/Release: AWS'
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch'
+        required: true
+        default: '<CURRENT>'
+
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'develop'
+
+        type: choice
+        options:
+          - develop
+          - staging
+          - production
+
+      region:
+        description: 'Region'
+        required: true
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+          - us-west-1
+          - us-west-2
+          - af-south-1
+          - ap-east-1
+          - ap-south-1
+          - ap-south-2
+          - ap-southeast-1
+          - ap-southeast-2
+          - ap-southeast-3
+          - ap-southeast-4
+          - ap-northeast-1
+          - ap-northeast-2
+          - ap-northeast-3
+          - ca-central-1
+          - ca-west-1
+          - cn-north-1
+          - cn-northwest-1
+          - eu-central-1
+          - eu-central-2
+          - eu-west-1
+          - eu-west-2
+          - eu-west-3
+          - eu-south-1
+          - eu-south-2
+          - eu-north-1
+          - il-central-1
+          - me-south-1
+          - me-central-1
+          - mx-central-1
+          - sa-east-1
+          - us-gov-east-1
+          - us-gov-west-1
+        default: us-east-1
+
+      timeout:
+        description: 'Timeout (e.g., 5m)'
+        type: string
+        default: '5m'
+
+jobs:
+  gwy-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Release Branch
+        run: |
+          # Setting Workflow Main Configuration
+          
+          # fail fast if client forgot to configure GWY repo token
+          
+          if [ "${{ secrets.GWY_TOKEN_REPO }}" = "" ]; then
+            echo "::error title=configuration error::missing GWY_TOKEN_REPO repo access secret, please check installation section in documentation"
+            exit 1
+          fi
+
+          # process target workflow branch 
+          
+          if [ "${{ inputs.branch }}" = "<CURRENT>" ]; then
+            echo "BRANCH=${{ github.ref }}" >> $GITHUB_ENV
+          else
+            echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+          fi
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+
+      - name: Setup Application Environment
+        uses: ./.github/actions/gwy/setup
+
+      - name: Set Release Environment Symbols
+        run: |
+          # release environment symbols configuration (token, repository, etc)
+          GWY_RELEASE_TAG=""
+          GWY_RELEASE_TOKEN=""
+          GWY_RELEASE_REPOSITORY=""
+
+          # Set symbols for environment: "production"
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            GWY_RELEASE_REPOSITORY="$GWY_APP"
+            GWY_RELEASE_TAG="$GWY_APP_VERSION"
+            GWY_RELEASE_TOKEN="${{ secrets.GWY_TOKEN_AWS }}"
+
+          # Set symbols for environment: "develop"
+          elif [ "${{ inputs.environment }}" = "develop" ]; then
+            GWY_RELEASE_REPOSITORY="$GWY_APP"
+            GWY_RELEASE_TAG="$GWY_APP_VERSION"
+            GWY_RELEASE_TOKEN="${{ secrets.GWY_TOKEN_AWS }}"
+
+          # Set symbols for environment: "staging"
+          elif [ "${{ inputs.environment }}" = "staging" ]; then
+            GWY_RELEASE_REPOSITORY="$GWY_APP"
+            GWY_RELEASE_TAG="$GWY_APP_VERSION"
+            GWY_RELEASE_TOKEN="${{ secrets.GWY_TOKEN_AWS }}"
+          fi
+
+          # Export to env for action
+          echo "GWY_RELEASE_TAG=$GWY_RELEASE_TAG" >> $GITHUB_ENV
+          echo "GWY_RELEASE_TOKEN=$GWY_RELEASE_TOKEN" >> $GITHUB_ENV
+          echo "GWY_RELEASE_REPOSITORY=$GWY_RELEASE_REPOSITORY" >> $GITHUB_ENV
+
+      - name: Release to AWS ECR
+        id: release-aws
+        uses: ./.github/actions/gwy/release-aws
+        with:
+            region: ${{ inputs.region }}
+            timeout: ${{ inputs.timeout }}
+
+      - name: Workflow Result
+        shell: bash
+        run: |
+          # Process Workflow Result
+          if [ "${{ steps.release-aws.outputs.result }}" != "success" ]; then
+            exit 1
+          fi
