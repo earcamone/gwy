@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- README documentation
-- GWY main CI Pipeline
-- Releases push to AWS/ECR manual workflow
+- GWY CI Pipeline
 - Code vulnerabilities scan manual workflow
 - Code outdated dependencies scan manual workflow
-- Code secrets (gitleaks) scan manual workflow
-- Code format (gofmt) scan manual workflow
-- Code linting scan (golangci-lint) scan manual workflow
+- Code secrets scan manual workflow
+- Code format scan manual workflow
+- Code linting scan manual workflow
 - Code tests & coverage manual workflow
+- Release images push to AWS/ECR workflow
+- Release badges generation workflow
