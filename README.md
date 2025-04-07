@@ -1,5 +1,5 @@
 
 # Go Workflow Yourself (GWY)
 
-Project comming soon, initial develop commit :)
+Project comming soon, initial master commit :)
 
