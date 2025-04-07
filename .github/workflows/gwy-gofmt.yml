@@ -23,9 +23,11 @@ on:
         type: boolean
         default: true
 
+run-name: "[${{ github.workflow }}] @${{ github.actor }}"
+
 jobs:
   gwy-gofmt:
-    name: code format (gofmt)
+    name: code format scan
     runs-on: ubuntu-latest
     steps:
       - name: Set Branch
@@ -41,9 +43,21 @@ jobs:
 
           # process target workflow branch 
           if [ "${{ inputs.branch }}" = "<CURRENT>" ]; then
-            echo "BRANCH=${{ github.ref }}" >> $GITHUB_ENV
+            echo "BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
           else
             echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+          fi
+
+      - name: GWY Bootstrapping Validations
+        run: |
+          if [ -z "${{ secrets.GWY_TOKEN_REPO }}" ]; then
+            echo "::error title=Mandatory repository token not configured::mandatory secret 'GWY_TOKEN_REPO' seems to be empty, kindly check GWY configuration documentation"
+            exit 1
+          fi
+          
+          if ! git ls-remote --exit-code https://x-access-token:${{ secrets.GWY_TOKEN_REPO }}@github.com/${{ github.repository }} "refs/heads/$BRANCH" "refs/tags/$BRANCH" > /dev/null; then
+            echo "::error title=Could not find workflow target branch::could not find branch or tag with name '$BRANCH', kindly provide a valid branch name."
+            exit 1
           fi
 
       - name: Checkout Code

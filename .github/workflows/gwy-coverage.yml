@@ -24,9 +24,17 @@ on:
         type: string
         default: '60'
 
+      summary-threshold:
+        description: 'Show functions with less than? (%)'
+        required: false
+        type: string
+        default: '50'
+
+run-name: "[${{ github.workflow }}] @${{ github.actor }}"
+
 jobs:
   gwy-coverage:
-    name: tests coverage
+    name: tests and coverage
     runs-on: ubuntu-latest
     steps:
       - name: Set Branch
@@ -42,9 +50,21 @@ jobs:
 
           # process target workflow branch 
           if [ "${{ inputs.branch }}" = "<CURRENT>" ]; then
-            echo "BRANCH=${{ github.ref }}" >> $GITHUB_ENV
+            echo "BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
           else
             echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+          fi
+
+      - name: GWY Bootstrapping Validations
+        run: |
+          if [ -z "${{ secrets.GWY_TOKEN_REPO }}" ]; then
+            echo "::error title=Mandatory repository token not configured::mandatory secret 'GWY_TOKEN_REPO' seems to be empty, kindly check GWY configuration documentation"
+            exit 1
+          fi
+          
+          if ! git ls-remote --exit-code https://x-access-token:${{ secrets.GWY_TOKEN_REPO }}@github.com/${{ github.repository }} "refs/heads/$BRANCH" "refs/tags/$BRANCH" > /dev/null; then
+            echo "::error title=Could not find workflow target branch::could not find branch or tag with name '$BRANCH', kindly provide a valid branch name."
+            exit 1
           fi
 
       - name: Checkout Code
@@ -66,6 +86,7 @@ jobs:
         with:
           token: ${{ secrets.GWY_REPO_TOKEN }}
           threshold: ${{ inputs.coverage }}
+          summary-threshold: ${{ inputs.summary-threshold }}
 
       - name: Workflow Result
         shell: bash

@@ -23,15 +23,15 @@ runs:
       shell: bash
       run: |
         # Initialize Code Format (gofmt) Check Environment
-        GWY_SUMMARY=$RUNNER_TEMP/summary.txt
-        echo -e "## Code Format Scan" >> $GWY_SUMMARY
+        GWY_SUMMARY=$RUNNER_TEMP/gofmt-summary.txt
+        echo -e "## Format Scan" >> $GWY_SUMMARY
         
         # set annotations reusable title
         echo "GWY_TITLE=code format check" >> $GITHUB_ENV
 
         echo "GWY_SUMMARY=$GWY_SUMMARY" >> $GITHUB_ENV
         echo "GWY_FORMATTING_ISSUES=0" >> $GITHUB_ENV
-        echo "GWY_ARTIFACT=$RUNNER_TEMP/gofmt-changes.diff" >> $GITHUB_ENV
+        echo "GWY_ARTIFACT=$RUNNER_TEMP/format-report.md" >> $GITHUB_ENV
         echo "GWY_BRANCH=$(git branch --show-current)" >> $GITHUB_ENV
         sync
 
@@ -49,12 +49,17 @@ runs:
         # Generate list of files with required changes
         GWY_FORMATTING_FILES=$(gofmt -l .)
         
-        # Generate diff of changes gofmt would make
-        timeout $GWY_TIMEOUT_SECONDS gofmt -d . > $GWY_ARTIFACT
-        
-        # Apply fixes for PR if needed
-        if [ ${{ inputs.create-pr }} == "true" ] && [ $GWY_FORMATTING_ISSUES -ne 0 ]; then
+        # Apply fixes and capture diff if issues exist
+        if [ $GWY_FORMATTING_ISSUES -ne 0 ]; then
           timeout $GWY_TIMEOUT_SECONDS gofmt -w .
+          git diff -U0 > $GWY_ARTIFACT
+        else
+          echo "" > $GWY_ARTIFACT
+        fi
+        
+        # Undo fixes if no PR requested
+        if [ ${{ inputs.create-pr }} != "true" ] && [ $GWY_FORMATTING_ISSUES -ne 0 ]; then
+          git restore .
         fi
         
         # Set action result based on formatting issues
@@ -66,16 +71,47 @@ runs:
         
         # Enhance summary, annotations, and debug output
         if [ $GWY_FORMATTING_ISSUES -ne 0 ]; then
-          echo "::error title=$GWY_TITLE: $GWY_FORMATTING_ISSUES FORMATTING ISSUES FOUND::check summary or artifact report for more more details"
-          echo "$GWY_FORMATTING_ISSUES files with format issues:" >> $GWY_SUMMARY
-          echo "$GWY_FORMATTING_FILES" | sed 's/^/  - /' >> $GWY_SUMMARY
+          echo "::error title=$GWY_TITLE: $GWY_FORMATTING_ISSUES FORMATTING ISSUES FOUND::check summary or artifact report for more details"
+          # Parse diff for exact change lines
+          awk '
+            BEGIN { RS = "diff --git"; FS = "\n" }
+            /^ a/ {
+              file = substr($1, 3)
+              sub(/^a\//, "", file)
+              sub(/ b\/.*/, "", file)
+              for (i = 1; i <= NF; i++) {
+                if ($i ~ /^@@ -[0-9]+ \+[0-9]+ @@/) {
+                  line = $i
+                  sub(/^@@ -[0-9]+ \+/, "", line)
+                  sub(/ .*/, "", line)
+                  break
+                }
+              }
+              for (i = 1; i <= NF; i++) {
+                if ($i ~ /^\+/) {
+                  if ($i !~ /^\+ *$/) {
+                    printf "  - [%s](https://github.com/%s/blob/%s/%s#L%s)\n", file, "'"$GITHUB_REPOSITORY"'", "'"$GWY_BRANCH"'", file, line >> "'"$GWY_SUMMARY"'"
+                  }
+                  break
+                }
+              }
+            }
+          ' $GWY_ARTIFACT
         else
           echo "::notice title=$GWY_TITLE: compliant code format::codebase is properly formatted"
-          echo "  - No formatting issues found :)" >> $GWY_SUMMARY
+          echo "  - no formatting issues detected" >> $GWY_SUMMARY
         fi
         
         cat $GWY_SUMMARY >> $GITHUB_STEP_SUMMARY
-        sync
+
+        # append to artifact gofmt diff output
+        
+        echo -e "\n\n## Format Fix Diff Output\n\n\`\`\`" >> $GWY_SUMMARY
+        cat $GWY_ARTIFACT >> $GWY_SUMMARY
+        echo -e "\`\`\`\n" >> $GWY_SUMMARY
+        
+        cat $GWY_SUMMARY_HEADING > $GWY_ARTIFACT
+        cat $GWY_SUMMARY >> $GWY_ARTIFACT
 
     - name: Create PR with gofmt Fixes
       id: create-pr
@@ -84,9 +120,9 @@ runs:
       uses: peter-evans/create-pull-request@v5
       with:
         token: ${{ inputs.token }}
-        title: "[CI] Automatic code format (gofmt) fix (${{ env.GWY_BRANCH }})"
+        title: "[GWY/CI] Automatic code format fix (${{ env.GWY_BRANCH }})"
         body: "Fixes formatting issues in branch ${{ env.GWY_BRANCH }} found in ${{ env.GWY_FORMATTING_ISSUES }} files"
-        commit-message: "[CI] Automatic gofmt fixes in ${{ env.GWY_FORMATTING_ISSUES }} files"
+        commit-message: "[GWY/CI] Automatic gofmt fixes in ${{ env.GWY_FORMATTING_ISSUES }} files"
         branch: ${{ env.GWY_BRANCH }}-gofmt-fix
 
     - name: Notify PR Creation Result
