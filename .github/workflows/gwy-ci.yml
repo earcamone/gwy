@@ -2,25 +2,55 @@
 name: 'GWY/CI'
 
 env:
-  # Go version the CI should use to run actions?
-  # <CURRENT> defaults to branch go.mod one.
+  # Go version CI should use to run?
+  # <CURRENT> uses branches go.mod one.
   GWY_GO_VERSION: "<CURRENT>"
 
-  # Should the CI allow PRs merging if any
-  # of the following enabled actions fail?
+  # Should the CI allow PRs merging if
+  # any of the enabled CI actions fail?
   GWY_ALLOW_MERGE_ON_FAILURE: false
 
-  # Individual Steps Timeout: set the TO for
-  # each individual action that might take time
+  # Individual Steps Timeout: set the TO for each
+  # step issued command that might take some time
   GWY_TIMEOUT: '5m'
 
   # Test & Coverage Scan? set true if you want
-  # CI to run tests and coverage in the code
+  # CI to run unit tests and coverage analysis
   GWY_TESTS: true
 
-  # Test Coverage Threshold: set coverage
-  # threshold to fail or not the check
+  # Coverage Minimum Threshold: set coverage
+  # minimum threshold to succeed validation
   GWY_TESTS_THRESHOLD: '90'
+
+  # Functions Minimum Coverage Notice:
+  #
+  # Set the minimum coverage threshold you want
+  # the summary to notice individual functions
+  # that are not meeting it. This option does
+  # not interfere at all with the prev. coverage
+  # threshold option, it is a cosmetic option
+  # used to note in coverage summaries individual
+  # functions that are not meeting a minimum
+  # coverage threshold.
+  #
+  # For example, if you want to see in the
+  # summary all individual functions coverage,
+  # you set it to 101 (all functions will have
+  # a coverage lower than 101), if you want to
+  # see functions with coverage under 50%, you
+  # guessed it! set to 51 ;) and if you want
+  # summary to only show the projects coverage,
+  # without individual functions coverage, set
+  # to 0 (functions can't have -1 coverage).
+  #
+  # I tend to set this option to 51, which helps
+  # me notice in the CI, even when it might be
+  # passing, some functions that actually were
+  # not fully tested when they could. Summary
+  # will link to the function, helping you
+  # quickly check the function body.
+  #
+  GWY_TESTS_SUMMARY_THRESHOLD: '51'
 
   # Vulnerabilities Scan? set true if you want
   # CI to check vulnerabilities in your code
@@ -35,8 +65,8 @@ env:
   GWY_DEPENDENCIES: true
 
   # Outdated Dependencies Scan Automatic Fixes? set
-  # true if you want CI to automatically fix the
-  # issues found, creating a PR with the changes.
+  # true if you want CI to create a PR to the branch
+  # updating the outdated dependencies automatically.
   GWY_DEPENDENCIES_PR: true
 
   # Code Format (gofmt) Scan? set true if you want
@@ -44,27 +74,24 @@ env:
   GWY_GOFMT: true
 
   # Code Format (gofmt) Scan Automatic Fixes? set
-  # true if you want CI to automatically fix the
-  # issues found, creating a PR with the changes.
+  # true if you want CI to create a PR to the branch
+  # updating the code format issues automatically.
   GWY_GOFMT_PR: true
 
   # Code Linting Scan? set true if you want CI to
   # scan for linting issues in your codebase
   GWY_LINT: true
 
-  # Target branch over which apply action? DON'T
+  # Target branch over which to apply CI? DON'T
   # CHANGE unless you know what you are doing :)
-  #
-  # When running manually a workflow, you can
-  # specify the target branch over which apply
-  # it, if CI is run by an "on event", it will
-  # be applied over the branch triggering it :)
-  BRANCH:  ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
+  BRANCH:  ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
 
 #
-# Enhance the triggering events with what fits better
+# Enhance triggering events with whatever fits better
 # your development cycle, I personally like to block
-# any repo merge that doesn't come from a PR :P
+# any repo merge to master or develop that doesn't come
+# from an approved pull request, thus I only apply the
+# CI over Pull Requests :P
 #
 
 on:
@@ -77,7 +104,6 @@ on:
       branch:
         description: 'Branch to apply CI'
         required: true
-        default: "<CURRENT>"
 
       go-version:
         description: 'Go version'
@@ -124,42 +150,36 @@ on:
         type: boolean
         default: true
 
+run-name: "[${{ github.workflow }}] @${{ github.actor }}"
+
 jobs:
   gwy-ci:
     runs-on: ubuntu-latest
+    if: github.repository != 'earcamone/gwy'
+
     steps:
       - name: Setting Manual CI Run Configuration
-        if: github.repository != 'earcamone/gwy' && github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         run: |
           # Setting Workflow Main Configuration
           
-          # fail fast if client forgot to configure GWY repo token
-          
-          if [ "${{ secrets.GWY_TOKEN_REPO }}" = "" ]; then
-            echo "::error title=configuration error::missing GWY_TOKEN_REPO repo access secret, please check installation section in documentation"
-            exit 1
-          fi
-
           #
           # This block simply overwrittes the CI config
           # options with the ones specified by client
           # when running it manually.
           #
-          
-          if [ "${{ inputs.branch }}" = "<CURRENT>" ]; then
-            echo "BRANCH=${{ github.ref }}" >> $GITHUB_ENV
-          else
-            echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+
+          if [ -z "${{ inputs.branch }}" ]; then
+            echo "::error title=CI Pipeline target branch not specified::mandatory target branch seems to be empty, kindly specify the branch to which you want to apply Pipeline"
+            exit 1
           fi
           
-          # Overwrite environment variables with inputs if
-          # CI was called with a workflow_dispatch event.
-
+          echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
           echo "GWY_TIMEOUT=${{ inputs.timeout }}" >> $GITHUB_ENV
           echo "GWY_CREATE_PR=${{ inputs.create_pr }}" >> $GITHUB_ENV
           echo "GWY_GO_VERSION=${{ inputs.go-version }}" >> $GITHUB_ENV
           
-          echo "GWY_LINT=${{ inputs.lint }}" >> $GITHUB_ENV
+          echo "GWY_LINT=${{ inputs.golint }}" >> $GITHUB_ENV
           echo "GWY_TESTS=${{ inputs.tests }}" >> $GITHUB_ENV
           echo "GWY_SECRETS=${{ inputs.secrets }}" >> $GITHUB_ENV          
           echo "GWY_VULNERABILITIES=${{ inputs.vulnerabilities }}" >> $GITHUB_ENV
@@ -170,8 +190,19 @@ jobs:
           echo "GWY_DEPENDENCIES=${{ inputs.dependencies }}" >> $GITHUB_ENV  
           echo "GWY_DEPENDENCIES_PR=${{ inputs.create_pr }}" >> $GITHUB_ENV          
 
+      - name: GWY Bootstrapping Validations
+        run: |
+          if [ -z "${{ secrets.GWY_TOKEN_REPO }}" ]; then
+            echo "::error title=Mandatory repository token not configured::mandatory secret 'GWY_TOKEN_REPO' seems to be empty, kindly check GWY configuration documentation"
+            exit 1
+          fi
+          
+          if ! git ls-remote --exit-code https://x-access-token:${{ secrets.GWY_TOKEN_REPO }}@github.com/${{ github.repository }} "refs/heads/$BRANCH" "refs/tags/$BRANCH" > /dev/null; then
+            echo "::error title=Could not find workflow target branch::could not find branch or tag with name '$BRANCH', kindly provide a valid branch name."
+            exit 1
+          fi
+
       - name: Checkout Code
-        if: github.repository != 'earcamone/gwy'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -179,7 +210,6 @@ jobs:
           token: ${{ secrets.GWY_TOKEN_REPO }}
 
       - name: Setup Environment
-        if: github.repository != 'earcamone/gwy'
         uses: ./.github/actions/gwy/setup
         with:
           timeout: ${{ env.GWY_TIMEOUT }}
@@ -189,56 +219,57 @@ jobs:
         id: check-coverage
         continue-on-error: true
 
-        if: github.repository != 'earcamone/gwy' && env.GWY_TESTS == 'true'
+        if: env.GWY_TESTS == 'true'
         uses: ./.github/actions/gwy/coverage
         with:
           token: ${{ secrets.GWY_TOKEN_REPO }}
           threshold: ${{ env.GWY_TESTS_THRESHOLD }}
+          summary-threshold: ${{ env.GWY_TESTS_SUMMARY_THRESHOLD }}
 
       - name: Secrets Scan
         id: check-secrets
         continue-on-error: true
-        if: github.repository != 'earcamone/gwy' && env.GWY_SECRETS == 'true'
+        if: env.GWY_SECRETS == 'true'
         uses: ./.github/actions/gwy/secrets
 
       - name: Dependencies Scan
         id: check-dependencies
         continue-on-error: true
 
-        if: github.repository != 'earcamone/gwy' && env.GWY_DEPENDENCIES == 'true'
+        if: env.GWY_DEPENDENCIES == 'true'
         uses: ./.github/actions/gwy/dependencies
         with:
           token: ${{ secrets.GWY_TOKEN_REPO }}
-          create-pr:  ${{ env.GWY_CREATE_PR }}
+          create-pr:  ${{ env.GWY_DEPENDENCIES_PR }}
 
       - name: Vulnerabilities Scan
         id: check-vulnerabilities
         continue-on-error: true
 
-        if: github.repository != 'earcamone/gwy' && env.GWY_VULNERABILITIES == 'true'
+        if: env.GWY_VULNERABILITIES == 'true'
         uses: ./.github/actions/gwy/vulnerabilities
 
-      - name: Code Format (gofmt) Scan
+      - name: Code Format Scan
         id: check-gofmt
         continue-on-error: true
 
-        if: github.repository != 'earcamone/gwy' && env.GWY_GOFMT == 'true'
+        if: env.GWY_GOFMT == 'true'
         uses: ./.github/actions/gwy/gofmt
         with:
           token: ${{ secrets.GWY_TOKEN_REPO }}
-          create-pr:  ${{ env.GWY_CREATE_PR }}
+          create-pr:  ${{ env.GWY_GOFMT_PR }}
 
       - name: Code Linting Scan
         id: check-golint
         continue-on-error: true
 
-        if: github.repository != 'earcamone/gwy' && env.GWY_GOFMT == 'true'
+        if: env.GWY_LINT == 'true'
         uses: ./.github/actions/gwy/golint
         with:
           token: ${{ secrets.GWY_TOKEN_REPO }}
 
       - name: CI Pipeline Result
-        if: github.repository != 'earcamone/gwy' && env.GWY_ALLOW_MERGE_ON_FAILURE == 'false'
+        if: env.GWY_ALLOW_MERGE_ON_FAILURE == 'false'
 
         shell: bash
         run: |
@@ -254,7 +285,7 @@ jobs:
 
           if [ "${{ steps.check-golint.outputs.result }}" != "success" ]; then
             exit 1
-          fi          
+          fi
           
           if [ "${{ steps.check-coverage.outputs.result }}" != "success" ]; then
             exit 1
