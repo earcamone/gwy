@@ -1,31 +1,102 @@
-name: 'Environment Bootstrapping'
-description: 'Environment bootstrapping for subsequent action calls'
+name: 'GWY Environment Setup'
+description: 'GWY Environment setup for subsequent steps'
 
 inputs:
   go-version:
     description: 'Go version - <CURRENT> uses go.mod one'
-    required: true
+    required: false
     default: '<CURRENT>'
 
   timeout:
     description: 'Timeout (per step)'
-    required: true
+    required: false
     default: '5m'
 
 runs:
   using: 'composite'
   steps:
-    - name: Bootstrap Environment
+    - name: Add Workflow Environment Heading
+      if: always()
       shell: bash
       run: |
-        # environment bootstrapping (general purpose actions required envs)
+        # Add Workflow Environment Heading
         
         # get current branch
+        
         GWY_BRANCH=$(git branch --show-current)
         echo "GWY_BRANCH=$GWY_BRANCH" >> $GITHUB_ENV
         echo "application branch: $GWY_BRANCH" >&2
         
+        # process workflow run symbols
+        
+        GWY_RUN_USER="$GITHUB_ACTOR"
+        echo "GWY_RUN_USER=$GWY_RUN_USER" >> $GITHUB_ENV
+        
+        GWY_RUN_WORKFLOW="$GITHUB_WORKFLOW"
+        echo "GWY_RUN_WORKFLOW=$GWY_RUN_WORKFLOW" >> $GITHUB_ENV
+        
+        GWY_RUN_DATE=$(date '+%Y-%m-%d %H:%M:%S')
+        echo "GWY_RUN_DATE=$GWY_RUN_DATE" >> $GITHUB_ENV 
+
+        if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+          GWY_RUN_TYPE="MANUAL"
+        else
+          GWY_RUN_TYPE="EVENT ($GITHUB_EVENT_NAME)"
+        fi
+
+        echo "GWY_RUN_TYPE=$GWY_RUN_TYPE" >> $GITHUB_ENV 
+
+        # determine environment go version
+        
+        if [ "${{ inputs.go-version }}" = "<CURRENT>" ]; then
+          if [ -f "go.mod" ]; then
+            GWY_GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}')
+            echo "go version (from go.mod): $GWY_GO_VERSION" >&2
+          else
+            # NOTE: error handling will be performed in next step
+            GWY_GO_VERSION=UNKNOWN
+          fi
+        else
+          GWY_GO_VERSION="${{ inputs.go-version }}"
+          echo "go version (user supplied): $GWY_GO_VERSION" >&2
+        fi
+
+        echo "GWY_GO_VERSION=$GWY_GO_VERSION" >> $GITHUB_ENV
+
+        # process steps timeout
+        
+        GWY_TIMEOUT_SECONDS=$(echo "${{ inputs.timeout }}" | sed 's/m/*60/;s/h/*3600/;s/d/*86400/' | bc)
+        echo "GWY_TIMEOUT_SECONDS=$GWY_TIMEOUT_SECONDS" >> $GITHUB_ENV 
+
+        # attach workflows heading
+        
+        GWY_SUMMARY_HEADING=$RUNNER_TEMP/gwy-summary-heading.md
+        echo "GWY_SUMMARY_HEADING=$GWY_SUMMARY_HEADING" >> $GITHUB_ENV
+        
+        echo -e "## $GWY_RUN_WORKFLOW by @${{ github.actor }}" >> $GWY_SUMMARY_HEADING
+        echo -e "  " >> $GWY_SUMMARY_HEADING
+        
+        echo -e " - \`   DATE\`: $GWY_RUN_DATE" >> $GWY_SUMMARY_HEADING
+        echo -e " - \`    RUN\`: $GWY_RUN_TYPE" >> $GWY_SUMMARY_HEADING
+        echo -e " - \`     GO\`: $GWY_GO_VERSION" >> $GWY_SUMMARY_HEADING
+        echo -e " - \` BRANCH\`: $GWY_BRANCH" >> $GWY_SUMMARY_HEADING
+        echo -e " - \`TIMEOUT\`: $GWY_TIMEOUT_SECONDS" >> $GWY_SUMMARY_HEADING
+        echo -e "  " >> $GWY_SUMMARY_HEADING
+
+        cat $GWY_SUMMARY_HEADING > $GITHUB_STEP_SUMMARY
+
+    - name: Bootstrap Environment
+      shell: bash
+      run: |
+        # environment bootstrapping (general purpose actions required envs)
+
         # parse app name from go.mod
+                
+        if [[ ! -f "go.mod" ]]; then
+          echo "::error title=FATAL ERROR::could not find 'go.mod' file in target branch '$GWY_BRANCH'"
+          exit 1
+        fi
+        
         GWY_APP=$(grep '^module ' go.mod | awk '{print $2}' | sed 's|.*/||')
         echo "GWY_APP=$GWY_APP" >> $GITHUB_ENV
         echo "application name (from go.mod): $GWY_APP" >&2
@@ -54,11 +125,6 @@ runs:
         
         echo "application version: $GWY_APP_VERSION" >&2
         echo "GWY_APP_VERSION=$GWY_APP_VERSION" >> $GITHUB_ENV
-        
-        # process steps timeout
-        
-        GWY_TIMEOUT_SECONDS=$(echo "${{ inputs.timeout }}" | sed 's/m/*60/;s/h/*3600/;s/d/*86400/' | bc)
-        echo "GWY_TIMEOUT_SECONDS=$GWY_TIMEOUT_SECONDS" >> $GITHUB_ENV 
 
     - name: Setup Go
       uses: actions/setup-go@v5

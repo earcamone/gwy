@@ -1,4 +1,4 @@
-name: 'GWY/Release: AWS'
+name: 'GWY/Release: AWS/ECR'
 
 on:
   workflow_dispatch:
@@ -6,7 +6,6 @@ on:
       branch:
         description: 'Branch'
         required: true
-        default: '<CURRENT>'
 
       environment:
         description: 'Environment'
@@ -65,6 +64,31 @@ on:
         type: string
         default: '5m'
 
+# NOTE: This workflow is currently thought to be
+# run manually, next release, which will integrate
+# GTY (Go Terraform Yourself) Continuous Delivery
+# schemes, will update workflow to allow clients
+# to easily add the triggering of this workflow
+# with, for example, push events to master branch.
+
+env:
+  # Create application repository if un-existent?
+  # Set true if you want the workflow to create
+  # the ECR repository for app if un-existent.
+  GWY_REPO_CREATE: true
+
+  # Application repository creation properties:
+  # If app ECR repository is un-existent and
+  # GWY_REPO_CREATE was set true, do you want
+  # the repository to be immutable or not?
+  #
+  # NOTE: Immutable repos will reject upload
+  # of image with conflicting tag, otherwise,
+  # it will overwrite the existent image.
+  GWY_REPO_IMMUTABLE: false
+
+run-name: "[${{ github.workflow }}] @${{ github.actor }}"
+
 jobs:
   gwy-release:
     runs-on: ubuntu-latest
@@ -72,20 +96,24 @@ jobs:
       - name: Set Release Branch
         run: |
           # Setting Workflow Main Configuration
-          
-          # fail fast if client forgot to configure GWY repo token
-          
-          if [ "${{ secrets.GWY_TOKEN_REPO }}" = "" ]; then
-            echo "::error title=configuration error::missing GWY_TOKEN_REPO repo access secret, please check installation section in documentation"
+          echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+
+      - name: GWY Bootstrapping Validations
+        run: |
+          # TODO: Add aws token validation
+          if [ -z "${{ secrets.GWY_TOKEN_AWS }}" ]; then
+            echo "::error title=AWS access key not configured::mandatory secret 'GWY_TOKEN_AWS' seems to be empty, kindly check GWY configuration documentation"
             exit 1
           fi
-
-          # process target workflow branch 
           
-          if [ "${{ inputs.branch }}" = "<CURRENT>" ]; then
-            echo "BRANCH=${{ github.ref }}" >> $GITHUB_ENV
-          else
-            echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+          if [ -z "${{ secrets.GWY_TOKEN_REPO }}" ]; then
+            echo "::error title=Mandatory repository token not configured::mandatory secret 'GWY_TOKEN_REPO' seems to be empty, kindly check GWY configuration documentation"
+            exit 1
+          fi
+          
+          if ! git ls-remote --exit-code https://x-access-token:${{ secrets.GWY_TOKEN_REPO }}@github.com/${{ github.repository }} "refs/heads/$BRANCH" "refs/tags/$BRANCH" > /dev/null; then
+            echo "::error title=Could not find workflow target branch::could not find branch or tag with name '$BRANCH', kindly provide a valid branch name."
+            exit 1
           fi
 
       - name: Checkout Code
@@ -123,6 +151,11 @@ jobs:
             GWY_RELEASE_TOKEN="${{ secrets.GWY_TOKEN_AWS }}"
           fi
 
+          if [ -z "$GWY_RELEASE_TOKEN" ]; then
+            echo "::error title=::"
+            exit 1
+          fi
+          
           # Export to env for action
           echo "GWY_RELEASE_TAG=$GWY_RELEASE_TAG" >> $GITHUB_ENV
           echo "GWY_RELEASE_TOKEN=$GWY_RELEASE_TOKEN" >> $GITHUB_ENV
@@ -136,6 +169,7 @@ jobs:
             timeout: ${{ inputs.timeout }}
 
       - name: Workflow Result
+        if: always()
         shell: bash
         run: |
           # Process Workflow Result

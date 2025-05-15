@@ -6,7 +6,6 @@ on:
       branch:
         description: 'Branch'
         required: true
-        default: '<CURRENT>'
 
       go-version:
         description: 'Go version'
@@ -23,9 +22,11 @@ on:
         type: boolean
         default: true
 
+run-name: "[${{ github.workflow }}] @${{ github.actor }}"
+
 jobs:
   gwy-dependencies:
-    name: outdated dependencies
+    name: outdated dependencies scan
     runs-on: ubuntu-latest
     steps:
       - name: Set Branch
@@ -39,11 +40,18 @@ jobs:
             exit 1
           fi
 
-          # process target workflow branch 
-          if [ "${{ inputs.branch }}" = "<CURRENT>" ]; then
-            echo "BRANCH=${{ github.ref }}" >> $GITHUB_ENV
-          else
-            echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+          echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+
+      - name: GWY Bootstrapping Validations
+        run: |
+          if [ -z "${{ secrets.GWY_TOKEN_REPO }}" ]; then
+            echo "::error title=Mandatory repository token not configured::mandatory secret 'GWY_TOKEN_REPO' seems to be empty, kindly check GWY configuration documentation"
+            exit 1
+          fi
+          
+          if ! git ls-remote --exit-code https://x-access-token:${{ secrets.GWY_TOKEN_REPO }}@github.com/${{ github.repository }} "refs/heads/$BRANCH" "refs/tags/$BRANCH" > /dev/null; then
+            echo "::error title=Could not find workflow target branch::could not find branch or tag with name '$BRANCH', kindly provide a valid branch name."
+            exit 1
           fi
 
       - name: Checkout Code
@@ -51,7 +59,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.BRANCH }}
-          token: ${{ secrets.GWY_REPO_TOKEN }}
+          token: ${{ secrets.GWY_TOKEN_REPO }}
 
       - name: Setup Environment
         uses: ./.github/actions/gwy/setup
@@ -63,7 +71,7 @@ jobs:
         id: check-dependencies
         uses: ./.github/actions/gwy/dependencies
         with:
-          token: ${{ secrets.GWY_REPO_TOKEN }}
+          token: ${{ secrets.GWY_TOKEN_REPO }}
           create-pr: ${{ inputs.create_pr }}
 
       - name: Workflow Result

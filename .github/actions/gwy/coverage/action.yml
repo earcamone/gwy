@@ -10,6 +10,11 @@ inputs:
     description: 'GitHub token for pushing badges'
     required: false
 
+  summary-threshold:
+    description: 'Minimum coverage threshold (%) of functions showed in summary'
+    required: false
+    default: '51'
+
 outputs:
   result:
     description: 'Result of the coverage check (success or failed)'
@@ -22,16 +27,37 @@ runs:
       shell: bash
       run: |
         # Running unit tests and coverage
+        GWY_COVER=cover.out
+        echo "GWY_COVER=$GWY_COVER" >> $GITHUB_ENV
+        
+        echo "GWY_ARTIFACT=$RUNNER_TEMP/coverage-report.md" >> $GITHUB_ENV
+        echo "GWY_SUMMARY=$RUNNER_TEMP/coverage-summary.md" >> $GITHUB_ENV
 
         # set annotations reusable title
         echo "GWY_TITLE=coverage threshold check" >> $GITHUB_ENV
         
-        # run unit tests and generate coverage report
-        timeout $GWY_TIMEOUT_SECONDS go test ./... -coverprofile=cover.out -covermode=atomic -coverpkg=./...
+        # run unit tests and generate coverage dump
+        GWY_GO_TEST="$(timeout $GWY_TIMEOUT_SECONDS go test ./... -coverprofile="$GWY_COVER" -covermode=atomic -coverpkg=./... 2>&1)"
+        echo "GWY_GO_TEST<<EOF" >> $GITHUB_ENV
+        echo "$GWY_GO_TEST" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
         
-        # Parsing coverage results
-        timeout $GWY_TIMEOUT_SECONDS go tool cover -func=cover.out | grep "total:" | awk '{print "Total Coverage: " $3}'
-        echo "GWY_COVERAGE=$(go tool cover -func=cover.out | grep 'total:' | awk '{print $3}' | sed 's/%//' | xargs printf "%.0f")" >> $GITHUB_ENV
+        echo "$GWY_GO_TEST"
+        
+        # process coverage dump
+        GWY_GO_TOOL=$(go tool cover -func="$GWY_COVER" 2>&1)
+        echo "GWY_GO_TOOL<<EOF" >> $GITHUB_ENV
+        echo "$GWY_GO_TOOL" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+        
+        echo "$GWY_GO_TOOL"
+        
+        # process coverage results
+        # timeout $GWY_TIMEOUT_SECONDS go tool cover -func=$GWY_COVER | grep "total:" | awk '{print "Total Coverage: " $3}'
+        GWY_COVERAGE=$(echo "$GWY_GO_TOOL" | grep 'total:' | awk '{print $3}' | sed 's/%//' | xargs printf "%.0f")
+        echo "GWY_COVERAGE=$GWY_COVERAGE" >> $GITHUB_ENV
+        
+        echo "Coverage Total: $GWY_COVERAGE"
 
     - name: Check Coverage Threshold
       id: check-coverage
@@ -53,55 +79,57 @@ runs:
           echo "result=success" >> $GITHUB_OUTPUT
         fi
 
-    # TODO:
-    #  - make badges generation condition configurable by client
-    #  - check badge creation error
-
-    - name: Generate Coverage Badge
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      continue-on-error: true
-
-      shell: bash
-      run: |
-        # Generating Coverage Badge
-        GWY_COLOR="red"
-        
-        if (( $(echo "$GWY_COVERAGE >= 90" | bc -l) )); then GWY_COLOR="green"
-        elif (( $(echo "$GWY_COVERAGE >= 80" | bc -l) )); then GWY_COLOR="yellow"
-        elif (( $(echo "$GWY_COVERAGE >= 70" | bc -l) )); then GWY_COLOR="orange"
-        fi
-        
-        curl -s "https://img.shields.io/badge/Coverage-$GWY_COVERAGE%25-$GWY_COLOR" > badge.svg
-
-    - name: Store Badge in GitHub Pages
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-      continue-on-error: true
-
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ inputs.token }} # Swap to inputs
-        publish_dir: .
-        keep_files: true
-        destination_dir: badges
-        commit_message: "Update coverage badge [skip ci]"
-
     - name: Add Coverage Summary to Job
       if: always()
       continue-on-error: true
-
       shell: bash
       run: |
         # Generating Coverage Summary
-        echo "## Code Coverage" >> $GITHUB_STEP_SUMMARY
-        timeout $GWY_TIMEOUT_SECONDS go tool cover -func=cover.out | grep -v "total:" >> $GITHUB_STEP_SUMMARY
-                
-        if [ ${{ env.GWY_COVERAGE }} -lt ${{ inputs.threshold }} ]; then
-          echo "  - FAILED: ${{ env.GWY_COVERAGE }}% Coverage" >> $GITHUB_STEP_SUMMARY
+        echo "## Code Coverage" >> $GWY_SUMMARY
+        
+        # Capture coverage output
+        GWY_COVERAGE_LINES=$(echo "$GWY_GO_TOOL" | grep -v "total:")
+
+        # Check if GWY_COVERAGE_LINES is empty
+        if [ -z "$GWY_COVERAGE_LINES" ]; then
+          echo "  - no tests found in repository" >> $GWY_SUMMARY
         else
-          echo "  - SUCCESS: ${{ env.GWY_COVERAGE }}% Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "$GWY_COVERAGE_LINES" | while IFS=: read -r full_path line rest; do
+            file=$(basename "$full_path")
+            relative_path=$(echo "$full_path" | sed 's|github.com/[^/]\+/[^/]\+/||')
+            func_percent=$(echo "$rest" | sed 's/^\s*//')
+            func=$(echo "$func_percent" | awk '{print $1}')
+            percent=$(echo "$func_percent" | awk '{print $2}' | sed 's/%$//')  # Strip % for comparison
+            # Compare coverage against threshold (convert to int for -lt)
+            if [ $(echo "$percent < ${{ inputs.summary-threshold }}" | bc) -eq 1 ]; then
+              url="https://github.com/${GITHUB_REPOSITORY}/blob/${GWY_BRANCH}/${relative_path}#L${line}"
+              printf '  - `%-8s` [%s()](%s)\n' "${percent}%" "$func" "$url" >> $GWY_SUMMARY
+            fi
+          done
+
+          echo -e "  - \`COVERAGE\` ${{ env.GWY_COVERAGE }}%" >> $GWY_SUMMARY
+        
+          if [ ${{ env.GWY_COVERAGE }} -lt ${{ inputs.threshold }} ]; then
+            echo -e "\n  \n![RESULT:FAILED](https://img.shields.io/badge/result-failed-red?style=for-the-badge)" >> $GWY_SUMMARY
+          else
+            echo -e "\n  \n![RESULT:SUCCESS](https://img.shields.io/badge/result-success-green?style=for-the-badge)" >> $GWY_SUMMARY
+          fi
         fi
 
-        cp $GITHUB_STEP_SUMMARY coverage-report.md
+        cat $GWY_SUMMARY >> $GITHUB_STEP_SUMMARY
+
+        # append to artifact coverage output
+
+        cat $GWY_SUMMARY_HEADING > $GWY_ARTIFACT
+        cat $GWY_SUMMARY >> $GWY_ARTIFACT
+        
+        echo -e "\n\n## Coverage Output\n" >> $GWY_ARTIFACT
+        echo -e "### go test\n  \n\`\`\`\n$GWY_GO_TEST\n\`\`\`\n" >> $GWY_ARTIFACT
+        echo -e "### go tool cover\n  \n\`\`\`\n$GWY_GO_TOOL\n\`\`\`\n" >> $GWY_ARTIFACT
+        
+        echo -e "### cover.out\n  \n\`\`\`\n" >> $GWY_ARTIFACT
+        cat $GWY_COVER >> $GWY_ARTIFACT 
+        echo -e "\n\`\`\`\n" >> $GWY_ARTIFACT
 
     - name: Upload Coverage Summary Artifact
       if: always()
@@ -110,7 +138,7 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
-        path: coverage-report.md
+        path: ${{ env.GWY_ARTIFACT }}
 
     - name: Action clean-up
       shell: bash
@@ -121,6 +149,6 @@ runs:
         unset GWY_COVERAGE
         unset GWY_THRESHOLD
         unset GWY_TOTAL_COVERAGE
+        unset GWY_COVERAGE_LINES
         
-        rm cover.out
-        rm coverage-report.md
+        rm -f cover.out

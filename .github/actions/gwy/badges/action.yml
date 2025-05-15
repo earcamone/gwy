@@ -1,0 +1,744 @@
+name: 'Generate Badges'
+description: 'Generates coverage, license, build, downloads, last commit, contributors, issues, stars, go version, and GWY badges'
+
+inputs:
+  token:
+    description: 'GitHub token for accessing repository data and pushing badges'
+    required: true
+
+  branch:
+    description: 'Orphan branch to save badges (<NONE>, <GH-PAGES>, or branch name)'
+    required: true
+    default: '<GH-PAGES>'
+
+  directory:
+    description: 'Directory in orphan branch to save badges (e.g., images/gwy/badges)'
+    required: true
+    default: 'images/gwy/badges'
+
+  url:
+    description: ''
+    required: false
+    default: 'github.com'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Badges Generation Bootstrapping
+      shell: bash
+      run: |
+        # Badges Generation Bootstrapping
+        echo "GWY_BADGES_TMP=$RUNNER_TEMP/gwy-badges" >> $GITHUB_ENV
+        echo "GWY_BADGES_URL=${{ inputs.url }}" >> $GITHUB_ENV
+        echo "GWY_BADGES_TITLE=release badges generation" >> $GITHUB_ENV
+        
+        SANITIZED_BRANCH=$(echo "$GWY_BRANCH" | tr '/' '-')
+        echo "SANITIZED_BRANCH=$SANITIZED_BRANCH" >> $GITHUB_ENV
+
+        # Warn if GWY_BADGES_TMP exists
+        if [ -d "$GWY_BADGES_TMP" ]; then
+          echo "::warning title=$GWY_BADGES_TITLE::Directory $GWY_BADGES_TMP exists in repo, consider changing GWY_BADGES_TMP"
+        fi
+
+        # Resolve orphan branch
+        if [ "${{ inputs.branch }}" = "<GH-PAGES>" ]; then
+          PAGES_INFO=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages")
+          if [ $? -eq 0 ] && [ -n "$PAGES_INFO" ]; then
+            GWY_BADGES_BRANCH=$(echo "$PAGES_INFO" | jq -r '.source.branch // "gh-pages"')
+            echo "Detected GitHub Pages branch: $GWY_BADGES_BRANCH"
+          else
+            GWY_BADGES_BRANCH="gh-pages"
+            echo "Failed to fetch GitHub Pages branch, defaulting to gh-pages"
+          fi
+        else
+          GWY_BADGES_BRANCH="${{ inputs.branch }}"
+          echo "Using specified badges branch: $GWY_BADGES_BRANCH"
+        fi
+        echo "GWY_BADGES_BRANCH=$GWY_BADGES_BRANCH" >> $GITHUB_ENV
+
+        echo -e "\n## Latest Release Badges\n" >> $GITHUB_STEP_SUMMARY
+
+        # Write summary header
+        if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+          echo "Badges were not requested to be commited in an assets branch in the repository, the following badges are linked to \`Shields.io\`. If you want your badges to be automatically updated upon each release merge to master or a daily job to keep your documentation badges counts (downloads, stars, etc) up-to-date, updating transparently your documentation, you need to specify a badges branch. Kindly refer to GWY documentation to learn how to do this." >> $GITHUB_STEP_SUMMARY
+        else
+          echo "The displayed badges have been commited to branch \`$GWY_BADGES_BRANCH\`. The following badges are linked to each of these files in the branch so you can use them in your documentation and forget (badges will be updated automatically in every release merge to master or you can run daily this workflow to update them)." >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate Coverage Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Calculate Coverage
+        echo "**Coverage:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        # Default to error value
+        GWY_COVERAGE="-1"
+
+        # Run tests with coverage, redirect errors to check later
+        if go test ./... -coverprofile=coverage.out 2>/dev/null; then
+          # Extract coverage percentage, check if it worked
+          TOTAL_LINE=$(go tool cover -func=coverage.out | grep "total:" || echo "")
+          if [ -n "$TOTAL_LINE" ]; then
+            GWY_COVERAGE=$(echo "$TOTAL_LINE" | awk '{print $3}' | sed 's/%//')
+            echo "Coverage: $GWY_COVERAGE%"
+          else
+            echo "No total coverage line found in coverage.out"
+          fi
+        else
+          echo "go test failed to generate coverage.out"
+        fi
+
+        # Generate badge if coverage is valid
+        if [ "$GWY_COVERAGE" != "-1" ]; then
+          # Determine color based on coverage
+          GWY_COLOR="red"
+          if (( $(echo "$GWY_COVERAGE >= ${{ env.BADGES_THRESHOLD_SUCCESS }}" | bc -l) )); then GWY_COLOR="green"
+          elif (( $(echo "$GWY_COVERAGE >= ${{ env.BADGES_THRESHOLD_WARNING }}" | bc -l) )); then GWY_COLOR="yellow"
+          elif (( $(echo "$GWY_COVERAGE >= ${{ env.BADGES_THRESHOLD_BAD }}" | bc -l) )); then GWY_COLOR="orange"
+          fi
+
+          # Output badges for all styles, one per line
+          SAVE_FAILED=false
+          for STYLE in flat flat-square plastic for-the-badge; do
+            SHIELDS_URL="https://img.shields.io/badge/Coverage-$GWY_COVERAGE%25-$GWY_COLOR?style=$STYLE"
+            if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+              BADGE_URL="$SHIELDS_URL"
+            else
+              if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                BADGE_URL="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/coverage-$STYLE.svg"
+              else
+                BADGE_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/coverage-$STYLE.svg"
+              fi
+              mkdir -p "$GWY_BADGES_TMP"
+              curl -s "$SHIELDS_URL" > "$GWY_BADGES_TMP/coverage-$STYLE.svg"
+              if [ ! -f "$GWY_BADGES_TMP/coverage-$STYLE.svg" ]; then
+                SAVE_FAILED=true
+              fi
+            fi
+            echo "  [![coverage-$STYLE]($SHIELDS_URL)]($BADGE_URL)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$SAVE_FAILED" = "true" ]; then
+            echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+            echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+          fi
+        else
+          echo "  **ERROR** - Failed to generate badge" >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::error generating coverage badge"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+      env:
+        GO_VERSION: ${{ env.GWY_GO_VERSION }}
+
+    - name: Generate License Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate License Badge
+
+        LICENSE_FILE=""
+        LICENSE_TYPE=""
+        LICENSE_FILES=("LICENSE" "LICENSE.md" "LICENSE.txt" "license" "license.md" "license.txt")
+        for file in "${LICENSE_FILES[@]}"; do
+          if [ -f "$file" ]; then
+            LICENSE_FILE="$file"
+            echo "Found license file: $LICENSE_FILE"
+            break
+          fi
+        done
+
+        if [ -n "$LICENSE_FILE" ]; then        
+          if grep -i "MIT License" "$LICENSE_FILE" > /dev/null; then
+            LICENSE_TYPE="MIT"
+          elif grep -i "Apache License" "$LICENSE_FILE" > /dev/null; then
+            LICENSE_TYPE="Apache-2.0"
+          elif grep -i "GNU General Public License" "$LICENSE_FILE" > /dev/null; then
+            if grep -i "version 3" "$LICENSE_FILE" > /dev/null; then
+              LICENSE_TYPE="GPL-3.0"
+            else
+              LICENSE_TYPE="GPL-2.0"
+            fi
+          elif grep -i "BSD License" "$LICENSE_FILE" > /dev/null; then
+            if grep -i "3-clause" "$LICENSE_FILE" > /dev/null; then
+              LICENSE_TYPE="BSD-3-Clause"
+            else
+              LICENSE_TYPE="BSD-2-Clause"
+            fi
+          else
+            LICENSE_TYPE="Unknown"
+          fi
+
+          if [ "$LICENSE_TYPE" != "Unknown" ]; then
+            echo "**License:**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            SAVE_FAILED=false
+            for STYLE in flat flat-square plastic for-the-badge; do
+              GREEN_URL="https://img.shields.io/badge/License-$LICENSE_TYPE-green?style=$STYLE"
+              BLUE_URL="https://img.shields.io/badge/License-$LICENSE_TYPE-blue?style=$STYLE"
+              ORANGE_URL="https://img.shields.io/badge/License-$LICENSE_TYPE-orange?style=$STYLE"
+              YELLOW_URL="https://img.shields.io/badge/License-$LICENSE_TYPE-yellow?style=$STYLE"
+              if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+                GREEN_LINK="$GREEN_URL"
+                BLUE_LINK="$BLUE_URL"
+                ORANGE_LINK="$ORANGE_URL"
+                YELLOW_LINK="$YELLOW_URL"
+              else
+                if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                  GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-green-$STYLE.svg"
+                  BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-blue-$STYLE.svg"
+                  ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-orange-$STYLE.svg"
+                  YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-yellow-$STYLE.svg"
+                else
+                  GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-green-$STYLE.svg"
+                  BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-blue-$STYLE.svg"
+                  ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-orange-$STYLE.svg"
+                  YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/license-yellow-$STYLE.svg"
+                fi
+                mkdir -p "$GWY_BADGES_TMP"
+                curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/license-green-$STYLE.svg"
+                curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/license-blue-$STYLE.svg"
+                curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/license-orange-$STYLE.svg"
+                curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/license-yellow-$STYLE.svg"
+                if [ ! -f "$GWY_BADGES_TMP/license-green-$STYLE.svg" ] || \
+                   [ ! -f "$GWY_BADGES_TMP/license-blue-$STYLE.svg" ] || \
+                   [ ! -f "$GWY_BADGES_TMP/license-orange-$STYLE.svg" ] || \
+                   [ ! -f "$GWY_BADGES_TMP/license-yellow-$STYLE.svg" ]; then
+                  SAVE_FAILED=true
+                fi
+              fi
+              echo "  [![license-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+                   "[![license-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+                   "[![license-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+                   "[![license-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+            if [ "$SAVE_FAILED" = "true" ]; then
+              echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+              echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+            fi
+          else
+            echo "License type not recognized, skipping badge"
+            echo "::notice title=$GWY_BADGES_TITLE::license type not recognized, skipping badge generation"
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "No license file found, skipping license badge"
+          echo "::notice title=$GWY_BADGES_TITLE::no license file found, skipping license badge generation"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate Build Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate Build Badge
+        echo "**Build:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        SAVE_FAILED=false
+        for STYLE in flat flat-square plastic for-the-badge; do
+          GREEN_URL="https://img.shields.io/badge/Build-Passing-green?style=$STYLE"
+          BLUE_URL="https://img.shields.io/badge/Build-Passing-blue?style=$STYLE"
+          ORANGE_URL="https://img.shields.io/badge/Build-Passing-orange?style=$STYLE"
+          YELLOW_URL="https://img.shields.io/badge/Build-Passing-yellow?style=$STYLE"
+          if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+            GREEN_LINK="$GREEN_URL"
+            BLUE_LINK="$BLUE_URL"
+            ORANGE_LINK="$ORANGE_URL"
+            YELLOW_LINK="$YELLOW_URL"
+          else
+            if [ "$GWY_BADGES_URL" = "github.com" ]; then
+              GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-green-$STYLE.svg"
+              BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-blue-$STYLE.svg"
+              ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-orange-$STYLE.svg"
+              YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-yellow-$STYLE.svg"
+            else
+              GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-green-$STYLE.svg"
+              BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-blue-$STYLE.svg"
+              ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-orange-$STYLE.svg"
+              YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/build-yellow-$STYLE.svg"
+            fi
+            mkdir -p "$GWY_BADGES_TMP"
+            curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/build-green-$STYLE.svg"
+            curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/build-blue-$STYLE.svg"
+            curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/build-orange-$STYLE.svg"
+            curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/build-yellow-$STYLE.svg"
+            if [ ! -f "$GWY_BADGES_TMP/build-green-$STYLE.svg" ] || \
+               [ ! -f "$GWY_BADGES_TMP/build-blue-$STYLE.svg" ] || \
+               [ ! -f "$GWY_BADGES_TMP/build-orange-$STYLE.svg" ] || \
+               [ ! -f "$GWY_BADGES_TMP/build-yellow-$STYLE.svg" ]; then
+              SAVE_FAILED=true
+            fi
+          fi
+          echo "  [![build-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+               "[![build-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+               "[![build-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+               "[![build-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "$SAVE_FAILED" = "true" ]; then
+          echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+        fi
+
+    - name: Generate Downloads Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate Downloads Badge
+        echo "**Downloads:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        DOWNLOADS=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" | \
+          jq -r '[.[] | .assets[] | .download_count] | add // 0')
+
+        if [ -n "$DOWNLOADS" ]; then
+          SAVE_FAILED=false
+          for STYLE in flat flat-square plastic for-the-badge; do
+            GREEN_URL="https://img.shields.io/badge/Downloads-$DOWNLOADS-green?style=$STYLE"
+            BLUE_URL="https://img.shields.io/badge/Downloads-$DOWNLOADS-blue?style=$STYLE"
+            ORANGE_URL="https://img.shields.io/badge/Downloads-$DOWNLOADS-orange?style=$STYLE"
+            YELLOW_URL="https://img.shields.io/badge/Downloads-$DOWNLOADS-yellow?style=$STYLE"
+            if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+              GREEN_LINK="$GREEN_URL"
+              BLUE_LINK="$BLUE_URL"
+              ORANGE_LINK="$ORANGE_URL"
+              YELLOW_LINK="$YELLOW_URL"
+            else
+              if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-green-$STYLE.svg"
+                BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-blue-$STYLE.svg"
+                ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-orange-$STYLE.svg"
+                YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-yellow-$STYLE.svg"
+              else
+                GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-green-$STYLE.svg"
+                BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-blue-$STYLE.svg"
+                ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-orange-$STYLE.svg"
+                YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/downloads-yellow-$STYLE.svg"
+              fi
+              mkdir -p "$GWY_BADGES_TMP"
+              curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/downloads-green-$STYLE.svg"
+              curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/downloads-blue-$STYLE.svg"
+              curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/downloads-orange-$STYLE.svg"
+              curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/downloads-yellow-$STYLE.svg"
+              if [ ! -f "$GWY_BADGES_TMP/downloads-green-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/downloads-blue-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/downloads-orange-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/downloads-yellow-$STYLE.svg" ]; then
+                SAVE_FAILED=true
+              fi
+            fi
+            echo "  [![downloads-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+                 "[![downloads-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+                 "[![downloads-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+                 "[![downloads-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$SAVE_FAILED" = "true" ]; then
+            echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+            echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+          fi
+        else
+          echo "  **ERROR** - Failed to generate badge" >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::error generating downloads badge"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate Release Date Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate Release Date Badge
+        echo "**Release Date:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        LAST_COMMIT=$(git log -1 --format=%cd --date=short 2>/dev/null || echo "unknown")
+        LAST_COMMIT=${LAST_COMMIT//-/.}
+
+        if [ -n "$LAST_COMMIT" ] && [ "$LAST_COMMIT" != "unknown" ]; then
+          SAVE_FAILED=false
+          for STYLE in flat flat-square plastic for-the-badge; do
+            GREEN_URL="https://img.shields.io/badge/Release-$LAST_COMMIT-green?style=$STYLE"
+            BLUE_URL="https://img.shields.io/badge/Release-$LAST_COMMIT-blue?style=$STYLE"
+            ORANGE_URL="https://img.shields.io/badge/Release-$LAST_COMMIT-orange?style=$STYLE"
+            YELLOW_URL="https://img.shields.io/badge/Release-$LAST_COMMIT-yellow?style=$STYLE"
+            if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+              GREEN_LINK="$GREEN_URL"
+              BLUE_LINK="$BLUE_URL"
+              ORANGE_LINK="$ORANGE_URL"
+              YELLOW_LINK="$YELLOW_URL"
+            else
+              if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-green-$STYLE.svg"
+                BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-blue-$STYLE.svg"
+                ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-orange-$STYLE.svg"
+                YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-yellow-$STYLE.svg"
+              else
+                GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-green-$STYLE.svg"
+                BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-blue-$STYLE.svg"
+                ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-orange-$STYLE.svg"
+                YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/last-commit-yellow-$STYLE.svg"
+              fi
+              mkdir -p "$GWY_BADGES_TMP"
+              curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/last-commit-green-$STYLE.svg"
+              curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/last-commit-blue-$STYLE.svg"
+              curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/last-commit-orange-$STYLE.svg"
+              curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/last-commit-yellow-$STYLE.svg"
+              if [ ! -f "$GWY_BADGES_TMP/last-commit-green-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/last-commit-blue-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/last-commit-orange-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/last-commit-yellow-$STYLE.svg" ]; then
+                SAVE_FAILED=true
+              fi
+            fi
+            echo "  [![last-commit-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+                 "[![last-commit-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+                 "[![last-commit-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+                 "[![last-commit-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$SAVE_FAILED" = "true" ]; then
+            echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+            echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+          fi
+        else
+          echo "  **ERROR** - Failed to generate badge" >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::error generating release date badge"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate Contributors Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate Contributors Badge
+        echo "**Contributors:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        CONTRIBUTORS=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}/contributors" | jq -r 'length')
+
+        if [ -n "$CONTRIBUTORS" ]; then
+          SAVE_FAILED=false
+          for STYLE in flat flat-square plastic for-the-badge; do
+            GREEN_URL="https://img.shields.io/badge/Contributors-$CONTRIBUTORS-green?style=$STYLE"
+            BLUE_URL="https://img.shields.io/badge/Contributors-$CONTRIBUTORS-blue?style=$STYLE"
+            ORANGE_URL="https://img.shields.io/badge/Contributors-$CONTRIBUTORS-orange?style=$STYLE"
+            YELLOW_URL="https://img.shields.io/badge/Contributors-$CONTRIBUTORS-yellow?style=$STYLE"
+            if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+              GREEN_LINK="$GREEN_URL"
+              BLUE_LINK="$BLUE_URL"
+              ORANGE_LINK="$ORANGE_URL"
+              YELLOW_LINK="$YELLOW_URL"
+            else
+              if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-green-$STYLE.svg"
+                BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-blue-$STYLE.svg"
+                ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-orange-$STYLE.svg"
+                YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-yellow-$STYLE.svg"
+              else
+                GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-green-$STYLE.svg"
+                BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-blue-$STYLE.svg"
+                ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-orange-$STYLE.svg"
+                YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/contributors-yellow-$STYLE.svg"
+              fi
+              mkdir -p "$GWY_BADGES_TMP"
+              curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/contributors-green-$STYLE.svg"
+              curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/contributors-blue-$STYLE.svg"
+              curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/contributors-orange-$STYLE.svg"
+              curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/contributors-yellow-$STYLE.svg"
+              if [ ! -f "$GWY_BADGES_TMP/contributors-green-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/contributors-blue-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/contributors-orange-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/contributors-yellow-$STYLE.svg" ]; then
+                SAVE_FAILED=true
+              fi
+            fi
+            echo "  [![contributors-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+                 "[![contributors-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+                 "[![contributors-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+                 "[![contributors-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$SAVE_FAILED" = "true" ]; then
+            echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+            echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+          fi
+        else
+          echo "  **ERROR** - Failed to generate badge" >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::error generating contributors badge"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate Issues Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate Issues Badge
+        echo "**Issues:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        ISSUES=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues?state=open" | jq -r 'length')
+
+        if [ -n "$ISSUES" ]; then
+          SAVE_FAILED=false
+          for STYLE in flat flat-square plastic for-the-badge; do
+            GREEN_URL="https://img.shields.io/badge/Issues-$ISSUES-green?style=$STYLE"
+            BLUE_URL="https://img.shields.io/badge/Issues-$ISSUES-blue?style=$STYLE"
+            ORANGE_URL="https://img.shields.io/badge/Issues-$ISSUES-orange?style=$STYLE"
+            YELLOW_URL="https://img.shields.io/badge/Issues-$ISSUES-yellow?style=$STYLE"
+            if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+              GREEN_LINK="$GREEN_URL"
+              BLUE_LINK="$BLUE_URL"
+              ORANGE_LINK="$ORANGE_URL"
+              YELLOW_LINK="$YELLOW_URL"
+            else
+              if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-green-$STYLE.svg"
+                BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-blue-$STYLE.svg"
+                ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-orange-$STYLE.svg"
+                YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-yellow-$STYLE.svg"
+              else
+                GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-green-$STYLE.svg"
+                BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-blue-$STYLE.svg"
+                ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-orange-$STYLE.svg"
+                YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/issues-yellow-$STYLE.svg"
+              fi
+              mkdir -p "$GWY_BADGES_TMP"
+              curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/issues-green-$STYLE.svg"
+              curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/issues-blue-$STYLE.svg"
+              curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/issues-orange-$STYLE.svg"
+              curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/issues-yellow-$STYLE.svg"
+              if [ ! -f "$GWY_BADGES_TMP/issues-green-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/issues-blue-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/issues-orange-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/issues-yellow-$STYLE.svg" ]; then
+                SAVE_FAILED=true
+              fi
+            fi
+            echo "  [![issues-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+                 "[![issues-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+                 "[![issues-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+                 "[![issues-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$SAVE_FAILED" = "true" ]; then
+            echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+            echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+          fi
+        else
+          echo "  **ERROR** - Failed to generate badge" >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::error generating issues badge"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate Stars Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate Stars Badge
+        echo "**Stars:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        STARS=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}" | jq -r '.stargazers_count')
+
+        if [ -n "$STARS" ]; then
+          SAVE_FAILED=false
+          for STYLE in flat flat-square plastic for-the-badge; do
+            GREEN_URL="https://img.shields.io/badge/Stars-$STARS-green?style=$STYLE"
+            BLUE_URL="https://img.shields.io/badge/Stars-$STARS-blue?style=$STYLE"
+            ORANGE_URL="https://img.shields.io/badge/Stars-$STARS-orange?style=$STYLE"
+            YELLOW_URL="https://img.shields.io/badge/Stars-$STARS-yellow?style=$STYLE"
+            if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+              GREEN_LINK="$GREEN_URL"
+              BLUE_LINK="$BLUE_URL"
+              ORANGE_LINK="$ORANGE_URL"
+              YELLOW_LINK="$YELLOW_URL"
+            else
+              if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-green-$STYLE.svg"
+                BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-blue-$STYLE.svg"
+                ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-orange-$STYLE.svg"
+                YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-yellow-$STYLE.svg"
+              else
+                GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-green-$STYLE.svg"
+                BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-blue-$STYLE.svg"
+                ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-orange-$STYLE.svg"
+                YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/stars-yellow-$STYLE.svg"
+              fi
+              mkdir -p "$GWY_BADGES_TMP"
+              curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/stars-green-$STYLE.svg"
+              curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/stars-blue-$STYLE.svg"
+              curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/stars-orange-$STYLE.svg"
+              curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/stars-yellow-$STYLE.svg"
+              if [ ! -f "$GWY_BADGES_TMP/stars-green-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/stars-blue-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/stars-orange-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/stars-yellow-$STYLE.svg" ]; then
+                SAVE_FAILED=true
+              fi
+            fi
+            echo "  [![stars-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+                 "[![stars-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+                 "[![stars-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+                 "[![stars-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$SAVE_FAILED" = "true" ]; then
+            echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+            echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+          fi
+        else
+          echo "  **ERROR** - Failed to generate badge" >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::error generating stars badge"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate Go Version Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate Go Version Badge
+        echo "**Go Version:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        GO_VERSION="${{ env.GWY_GO_VERSION }}"
+        if [ -z "$GO_VERSION" ]; then
+          GO_VERSION="unknown"
+        fi
+
+        if [ "$GO_VERSION" != "unknown" ]; then
+          SAVE_FAILED=false
+          for STYLE in flat flat-square plastic for-the-badge; do
+            GREEN_URL="https://img.shields.io/badge/Go-$GO_VERSION-green?style=$STYLE"
+            BLUE_URL="https://img.shields.io/badge/Go-$GO_VERSION-blue?style=$STYLE"
+            ORANGE_URL="https://img.shields.io/badge/Go-$GO_VERSION-orange?style=$STYLE"
+            YELLOW_URL="https://img.shields.io/badge/Go-$GO_VERSION-yellow?style=$STYLE"
+            if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+              GREEN_LINK="$GREEN_URL"
+              BLUE_LINK="$BLUE_URL"
+              ORANGE_LINK="$ORANGE_URL"
+              YELLOW_LINK="$YELLOW_URL"
+            else
+              if [ "$GWY_BADGES_URL" = "github.com" ]; then
+                GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-green-$STYLE.svg"
+                BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-blue-$STYLE.svg"
+                ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-orange-$STYLE.svg"
+                YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-yellow-$STYLE.svg"
+              else
+                GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-green-$STYLE.svg"
+                BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-blue-$STYLE.svg"
+                ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-orange-$STYLE.svg"
+                YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/go-version-yellow-$STYLE.svg"
+              fi
+              mkdir -p "$GWY_BADGES_TMP"
+              curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/go-version-green-$STYLE.svg"
+              curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/go-version-blue-$STYLE.svg"
+              curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/go-version-orange-$STYLE.svg"
+              curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/go-version-yellow-$STYLE.svg"
+              if [ ! -f "$GWY_BADGES_TMP/go-version-green-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/go-version-blue-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/go-version-orange-$STYLE.svg" ] || \
+                 [ ! -f "$GWY_BADGES_TMP/go-version-yellow-$STYLE.svg" ]; then
+                SAVE_FAILED=true
+              fi
+            fi
+            echo "  [![go-version-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+                 "[![go-version-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+                 "[![go-version-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+                 "[![go-version-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$SAVE_FAILED" = "true" ]; then
+            echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+            echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+          fi
+        else
+          echo "  **ERROR** - Failed to generate badge" >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::error generating go version badge"
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate GWY Badge
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Generate GWY Badge
+        echo "**Powered by:**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        SAVE_FAILED=false
+        for STYLE in flat flat-square plastic for-the-badge; do
+          GREEN_URL="https://img.shields.io/badge/Powered%20by-GWY-green?style=$STYLE"
+          BLUE_URL="https://img.shields.io/badge/Powered%20by-GWY-blue?style=$STYLE"
+          ORANGE_URL="https://img.shields.io/badge/Powered%20by-GWY-orange?style=$STYLE"
+          YELLOW_URL="https://img.shields.io/badge/Powered%20by-GWY-yellow?style=$STYLE"
+          if [ "${{ inputs.branch }}" = "<NONE>" ]; then
+            GREEN_LINK="$GREEN_URL"
+            BLUE_LINK="$BLUE_URL"
+            ORANGE_LINK="$ORANGE_URL"
+            YELLOW_LINK="$YELLOW_URL"
+          else
+            if [ "$GWY_BADGES_URL" = "github.com" ]; then
+              GREEN_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-green-$STYLE.svg"
+              BLUE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-blue-$STYLE.svg"
+              ORANGE_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-orange-$STYLE.svg"
+              YELLOW_LINK="https://github.com/${GITHUB_REPOSITORY}/blob/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-yellow-$STYLE.svg"
+            else
+              GREEN_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-green-$STYLE.svg"
+              BLUE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-blue-$STYLE.svg"
+              ORANGE_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-orange-$STYLE.svg"
+              YELLOW_LINK="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$GWY_BADGES_BRANCH/${{ inputs.directory }}/$SANITIZED_BRANCH/gwy-yellow-$STYLE.svg"
+            fi
+            mkdir -p "$GWY_BADGES_TMP"
+            curl -s "$GREEN_URL" > "$GWY_BADGES_TMP/gwy-green-$STYLE.svg"
+            curl -s "$BLUE_URL" > "$GWY_BADGES_TMP/gwy-blue-$STYLE.svg"
+            curl -s "$ORANGE_URL" > "$GWY_BADGES_TMP/gwy-orange-$STYLE.svg"
+            curl -s "$YELLOW_URL" > "$GWY_BADGES_TMP/gwy-yellow-$STYLE.svg"
+            if [ ! -f "$GWY_BADGES_TMP/gwy-green-$STYLE.svg" ] || \
+               [ ! -f "$GWY_BADGES_TMP/gwy-blue-$STYLE.svg" ] || \
+               [ ! -f "$GWY_BADGES_TMP/gwy-orange-$STYLE.svg" ] || \
+               [ ! -f "$GWY_BADGES_TMP/gwy-yellow-$STYLE.svg" ]; then
+              SAVE_FAILED=true
+            fi
+          fi
+          echo "  [![gwy-green-$STYLE]($GREEN_URL)]($GREEN_LINK)   " \
+               "[![gwy-blue-$STYLE]($BLUE_URL)]($BLUE_LINK)   " \
+               "[![gwy-orange-$STYLE]($ORANGE_URL)]($ORANGE_LINK)   " \
+               "[![gwy-yellow-$STYLE]($YELLOW_URL)]($YELLOW_LINK)" >> $GITHUB_STEP_SUMMARY
+        done
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "$SAVE_FAILED" = "true" ]; then
+          echo "Failed to save some badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::Failed to save some badge files, rely on Shields.io URLs or rerun the workflow"
+        fi
+
+    - name: Publish Badges
+      if: inputs.branch != '<NONE>'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ inputs.token }}
+        publish_dir: ${{ env.GWY_BADGES_TMP }}
+        publish_branch: ${{ env.GWY_BADGES_BRANCH }}
+        destination_dir: ${{ inputs.directory }}/${{ env.SANITIZED_BRANCH }}
+        commit_message: "[GWY/CI] latest release badges generation"
+      continue-on-error: true
+      id: publish-badges
+
+    - name: Check Publish Status
+      if: inputs.branch != '<NONE>'
+      shell: bash
+      run: |
+        if [ "${{ steps.publish-badges.outcome }}" != "success" ]; then
+          echo "Failed to commit badge files, rely on Shields.io URLs or rerun the workflow." >> $GITHUB_STEP_SUMMARY
+          echo "::error title=$GWY_BADGES_TITLE::Failed to commit badge files, rely on Shields.io URLs or rerun the workflow"
+        fi
