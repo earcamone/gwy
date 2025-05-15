@@ -1,0 +1,180 @@
+name: "GWY/Release: Badges"
+
+env:
+  # commit generated badges to orphan branch?
+  #
+  # The badges are generated using Shields.io,
+  # though you can configure the workflow to
+  # commit the generated badges to an orphan
+  # branch, allowing to link the documentation
+  # to these badges and getting them updated
+  # automatically upon each new release merge
+  # to the master branch. Workflow can also be
+  # run manually (or by a daily job) to update
+  # the counter badges like 'Downloads' to keep
+  # your client interactions up-to-date.
+  #
+  # Available Options:
+  #  - <NONE>
+  #  - <GH-PAGES>
+  #  - {branch_name}
+  #
+  # <NONE> will not commit the generated badges,
+  # <GH-PAGES> will query the GH API to get your
+  # currently configured GitHub Pages branch, if
+  # Pages is disabled or there is an error, it
+  # will default to 'gh-pages'.
+  #
+  # If none of those two special names are found
+  # in this option, GWY will use as target branch
+  # whatever branch name was entered here.
+  #
+  BADGES_BRANCH: '<GH-PAGES>'
+
+  # directory in orphan branch to commit badges?
+  #
+  # NOTE: if BADGES_BRANCH is set to <NONE>, this
+  # configuration will be ignored all together.
+  #
+  # You can customize the target directory where
+  # the generated badges will be commited in the
+  # badges commit branch. Please note that GWY
+  # will append to this directory the branch name
+  # for which the badges are being generated. I
+  # had seen in the past, not that often, people
+  # having different badges for different branches,
+  # for example coverage both in develop and master.
+  # Thus, even though it might be a border case,
+  # it was not that of an issue supporting the
+  # ability for clients to generate badges over
+  # branches, thus this dir addition was added.
+  #
+  BADGES_DIR: "images/gwy/badges"
+
+  # Commited badges url type?
+  #
+  # NOTE: if BADGES_BRANCH is set to <NONE>, this
+  # configuration will be ignored all together.
+  #
+  # When you request the generated badges to be
+  # commited to an orphan branch, even though the
+  # badges image source in the summary link to
+  # Shields.io (so they can be displayed even in
+  # private repos), the badges will link to the
+  # corresponding badges commited files in the
+  # repo so client can easily retrieve the link
+  # and stick it in the documentation. GitHub
+  # offers two domains to access repo files, you
+  # use this option to request which domain you
+  # want those URLs to be generated.
+  #
+  # Available Options:
+  #  - github.com
+  #  - githubusercontent.com
+  #
+  BADGES_URL: "githubusercontent.com"
+
+  # Coverage badge color awareness customization
+  #
+  # Following you can customize the color of the
+  # generated unit tests coverage badge based on
+  # its result. The workflow will generate the
+  # badge with three different colors to notice
+  # "awareness" over its result based on the
+  # following configuration.
+  #
+  # If coverage greater than BADGES_THRESHOLD_SUCCESS,
+  # the badge will be generated in green. If coverage
+  # is greater than BADGES_THRESHOLD_WARNING, will be
+  # generated in yellow. If greater than "_BAD", will
+  # be generated in orange and if lower, in red.
+  #
+  BADGES_THRESHOLD_SUCCESS: 90
+  BADGES_THRESHOLD_WARNING: 85
+  BADGES_THRESHOLD_BAD: 80
+
+  # Target branch over which to apply CI? DON'T
+  # CHANGE unless you know what you are doing :)
+  BRANCH:  ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
+
+on:
+  push:
+    branches:
+      - master
+
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch'
+        required: true
+
+      badges-branch:
+        description: 'Badges Commit Branch?'
+        required: true
+        default: '<GH-PAGES>'
+
+      badges-directory:
+        description: 'Commit Branch Directory'
+        required: true
+        default: 'images/gwy/badges'
+
+      badges-url:
+        description: 'Badges Domain URL'
+        required: true
+        type: choice
+        options:
+          - github.com
+          - githubusercontent.com
+        default: githubusercontent.com
+
+run-name: "[${{ github.workflow }}] @${{ github.actor }}"
+
+jobs:
+  badges-create:
+    runs-on: ubuntu-latest
+    if: github.repository != 'earcamone/gwy'
+
+    steps:
+      - name: Badges Environment Bootstrapping
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          # Badges Environment Bootstrapping
+
+          if [ -z "${{ inputs.branch }}" ]; then
+            echo "::error title=CI Pipeline target branch not specified::mandatory target branch seems to be empty, kindly specify the branch to which you want to apply Pipeline"
+            exit 1
+          fi
+          
+          echo "BRANCH=${{ inputs.branch }}" >> $GITHUB_ENV
+          echo "BADGES_URL=${{ inputs.badges-url }}" >> $GITHUB_ENV
+          echo "BADGES_BRANCH=${{ inputs.badges-branch }}" >> $GITHUB_ENV
+          echo "BADGES_DIR=${{ inputs.badges-directory }}" >> $GITHUB_ENV
+
+      - name: GWY Bootstrapping Validations
+        run: |
+          if [ -z "${{ secrets.GWY_TOKEN_REPO }}" ]; then
+            echo "::error title=Mandatory repository token not configured::mandatory secret 'GWY_TOKEN_REPO' seems to be empty, kindly check GWY configuration documentation"
+            exit 1
+          fi
+          
+          if ! git ls-remote --exit-code https://x-access-token:${{ secrets.GWY_TOKEN_REPO }}@github.com/${{ github.repository }} "refs/heads/$BRANCH" "refs/tags/$BRANCH" > /dev/null; then
+            echo "::error title=Could not find workflow target branch::could not find branch or tag with name '$BRANCH', kindly provide a valid branch name."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ env.BRANCH }}
+
+      - name: Setup Environment
+        uses: ./.github/actions/gwy/setup
+
+      - name: Generate and Publish Badges
+        uses: ./.github/actions/gwy/badges
+        with:
+          url: ${{ env.BADGES_URL }}
+          branch: ${{ env.BADGES_BRANCH }}
+          directory: ${{ env.BADGES_DIR }}
+          token: ${{ secrets.GWY_TOKEN_REPO }}

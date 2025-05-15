@@ -23,7 +23,7 @@ runs:
       shell: bash
       run: |
         # Initialize Dependencies Scanning Environment
-        GWY_SUMMARY=$RUNNER_TEMP/summary.txt
+        GWY_SUMMARY=$RUNNER_TEMP/dependencies-summary.txt
         echo -e "## Outdated Dependencies Scan\n" >> $GWY_SUMMARY
 
         # set annotations reusable title
@@ -32,7 +32,7 @@ runs:
         # export reusable environments        
         echo "GWY_SUMMARY=$GWY_SUMMARY" >> $GITHUB_ENV
         echo "GWY_DEPENDENCIES_COUNT=0" >> $GITHUB_ENV
-        echo "GWY_ARTIFACT=$RUNNER_TEMP/dependencies-report.txt" >> $GITHUB_ENV
+        echo "GWY_ARTIFACT=$RUNNER_TEMP/dependencies-report.md" >> $GITHUB_ENV
         echo "GWY_BRANCH=$(git branch --show-current)" >> $GITHUB_ENV
         sync
 
@@ -51,7 +51,14 @@ runs:
         # Save dependency updates found for report
         GWY_DEPENDENCIES_FOUND=$(git diff -U0 go.mod | grep -E '^\-[^+-]')
         
-        GWY_DEPENDENCIES_COUNT=$(echo "$GWY_DEPENDENCIES_FOUND" | wc -l)
+        # GWY_DEPENDENCIES_COUNT=$(echo "$GWY_DEPENDENCIES_FOUND" | wc -l)
+        # process outdated dependencies count
+        if [ -z "$GWY_DEPENDENCIES_FOUND" ]; then
+          GWY_DEPENDENCIES_COUNT=0
+        else
+          GWY_DEPENDENCIES_COUNT=$(echo "$GWY_DEPENDENCIES_FOUND" | wc -l)
+        fi
+        
         echo "GWY_DEPENDENCIES_COUNT=$GWY_DEPENDENCIES_COUNT" >> $GITHUB_ENV
         
         # set action result based in outdated dependencies count
@@ -73,21 +80,29 @@ runs:
         # Enhance summary, annotations, and debug output
         if [ $GWY_DEPENDENCIES_COUNT -ne 0 ]; then
           # Error annotation with count
-          echo "::error title=$GWY_TITLE: $GWY_DEPENDENCIES_COUNT OUTDATED DEPENDENCIES!::check summary or artifact report for more more details"
+          echo "::error title=$GWY_TITLE: $GWY_DEPENDENCIES_COUNT OUTDATED DEPENDENCIES!::check summary or artifact report for more details"
         
           # Add to summary
           echo "$GWY_DEPENDENCIES_FOUND" | sed 's/^/  /' >> $GWY_SUMMARY
         
         else
           # Success annotation
-          echo "::notice title=$GWY_TITLE: dependencies up-to-date::code dependencies are up-to-date"
+          echo "::notice title=$GWY_TITLE: up-to-date::code dependencies in go.mod are up-to-date"
         
           # Add to summary
-          echo "  - dependencies up-to-date" >> $GWY_SUMMARY
+          echo "  - no outdated dependencies detected" >> $GWY_SUMMARY
         fi
         
         cat $GWY_SUMMARY >> $GITHUB_STEP_SUMMARY
-        sync
+
+        # append to artifact dependencies scan output
+        
+        echo -e "\n\n## Dependencies Scan Output\n\n\`\`\`" >> $GWY_SUMMARY
+        cat $GWY_ARTIFACT >> $GWY_SUMMARY
+        echo -e "\`\`\`\n" >> $GWY_SUMMARY
+
+        cat $GWY_SUMMARY_HEADING > $GWY_ARTIFACT
+        cat $GWY_SUMMARY >> $GWY_ARTIFACT
 
     - name: Create PR with Updates
       id: create-pr
@@ -98,9 +113,9 @@ runs:
 
       with:
         token: ${{ inputs.token }}
-        title: "[CI] Automatic outdated dependencies update"
+        title: "[GWY/CI] Automatic outdated dependencies fix (${{ env.GWY_BRANCH }})"
         body: "Automatic update of ${{ env.GWY_DEPENDENCIES_COUNT }} outdated dependencies"
-        commit-message: "[CI] automatic update of ${{ env.GWY_DEPENDENCIES_COUNT }} outdated dependencies"
+        commit-message: "[GWY/CI] automatic fix of ${{ env.GWY_DEPENDENCIES_COUNT }} outdated dependencies"
         branch: ${{ env.GWY_BRANCH }}-dependencies-fix
 
     - name: Notify PR Creation Result
@@ -119,7 +134,7 @@ runs:
         fi
 
     - name: Upload Outdated Dependencies Report
-      if: env.GWY_DEPENDENCIES_COUNT != '0'
+      if: always()
       continue-on-error: true
 
       uses: actions/upload-artifact@v4
@@ -134,8 +149,8 @@ runs:
         # Dependencies Scanning Clean-Up
 
         # remove temporary files
-        rm $GWY_SUMMARY
-        rm $GWY_ARTIFACT
+        rm -f $GWY_SUMMARY
+        rm -f $GWY_ARTIFACT
         
         # Unset variables
         unset GWY_TITLE
