@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-beta.2] - XXXX-XX-XX
+
+### Fixed
+
+- Badges Generation Workflow: Fixed bug in "Issues" count badge,
+  it was summing together opened issues and pull requests.
+
 ## [1.0.0-beta.1] - 2025-05-16
 
 This is the first official release beta. 
