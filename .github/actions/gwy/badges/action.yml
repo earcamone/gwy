@@ -485,9 +485,10 @@ runs:
         echo "**Issues:**" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
 
-        ISSUES=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
-          "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues?state=open" | jq -r 'length')
-
+        ISSUES=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${{ inputs.token }}" \
+          "https://api.github.com/search/issues?q=repo:${GITHUB_REPOSITORY}+is:issue+state:open" \
+          | jq .total_count)
+  
         if [ -n "$ISSUES" ]; then
           SAVE_FAILED=false
           for STYLE in flat flat-square plastic for-the-badge; do
