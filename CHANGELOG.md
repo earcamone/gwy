@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0-beta.2] - XXXX-XX-XX
 
+### Added
+
+- Badges Generation Workflow: added trigger on release 
+  pushes event to additional "master" branch `main`
+  
 ### Fixed
 
 - Badges Generation Workflow: Fixed bug in "Issues" count badge,

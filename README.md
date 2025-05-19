@@ -553,6 +553,19 @@ them in your documentation, getting updated automatically in your next
 release. You can also schedule a daily job to run the workflow, updating
 automatically all your count badges like `Downloads` and `Stars`.
 
+By default, this workflow gets triggered automatically on push events to 
+popular "master" branches `master` and `main`. If you happen to have a 
+different one, you can customize your releases master branch name by editing 
+the following block inside the workflow file:
+
+```
+on:
+  push:
+    branches:
+      - main
+      - master
+```
+
 Configure the badges target branch, the target directory within it and which
 of the available GitHub domains you want the urls to be generated with editing 
 the variables at the top of the workflow `.github/workflows/gwy-badges.yml`,
