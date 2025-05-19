@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0-beta.2] - XXXX-XX-XX
+## [1.0.0-beta.2] - 2025-05-18
+
+This is the first official release beta.
+
+The project has been [extensively tested](https://github.com/earcamone/gwy-playground/actions)
+but because, at the end of the day, it's a sole programmer project, I'm leaving
+some space for possible bugs reporting so, if you find some, kindly report them.
 
 ### Added
 
