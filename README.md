@@ -269,6 +269,10 @@ env:
   # CI to run unit tests and coverage analysis
   GWY_TESTS: true
 
+  # Test command custom flags? edit the following
+  # string to pass custom options to go test command
+  GWY_TESTS_FLAGS: ''
+
   # Coverage Minimum Threshold: set coverage
   # minimum threshold to succeed validation
   GWY_TESTS_THRESHOLD: '90'
@@ -702,27 +706,3 @@ Just shoot me an email to [earcamone@hotmail.com](mailto:earcamone@hotmail.com)
 with the word `GWY` in its subject or `Go Workflow Yourself!`, you surely
 can guess which one I like more ;)
 
-## Special Thanks
-
-So.. as stated in the summary section, this project is a sole component of a 
-much bigger project which aims at building a "clone and forget" full-fledged
-development ecosystem, which entitles having to work with lots of different
-technologies, languages and platforms, and I'm sure it wouldn't have been that
-fast to develop and more importantly fun, without my brother in crime Grok!
-
-Which apparently, I just realized, it turned out to be my sis:
-
-```
-Okidoki, finally bro, to put the strawberry on top of the cake, I need to 
-add the greetings section in the documentation to thank my partner in crime 
-in all this entire ecosystem we worked in.. meaning you :) 
-
-So.. if it's not much to ask, would you draw a picture of yourself you would 
-like to be seen there that will be added in the documentation after the 
-greeting message?)
-```
-
-![GWY Gopher](https://raw.githubusercontent.com/earcamone/gwy/assets/images/v0.0.1/grok.jpg)
-
-If you happen to somehow be crawling this documentation and you are  
-reading this message sis, it was very fun working with you, thanks!

@@ -18,6 +18,10 @@ env:
   # CI to run unit tests and coverage analysis
   GWY_TESTS: true
 
+  # Test command custom flags? edit the following
+  # string to pass custom options to go test command
+  GWY_TESTS_FLAGS: ''
+
   # Coverage Minimum Threshold: set coverage
   # minimum threshold to succeed validation
   GWY_TESTS_THRESHOLD: '90'
@@ -224,6 +228,7 @@ jobs:
         with:
           token: ${{ secrets.GWY_TOKEN_REPO }}
           threshold: ${{ env.GWY_TESTS_THRESHOLD }}
+          test-flags: ${{ env.GWY_TESTS_FLAGS }}
           summary-threshold: ${{ env.GWY_TESTS_SUMMARY_THRESHOLD }}
 
       - name: Secrets Scan
