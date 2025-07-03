@@ -15,6 +15,11 @@ inputs:
     required: false
     default: '51'
 
+  test-flags:
+    description: 'Custom test flags to attach when running tests'
+    required: false
+    default: ''
+
 outputs:
   result:
     description: 'Result of the coverage check (success or failed)'
@@ -35,9 +40,12 @@ runs:
 
         # set annotations reusable title
         echo "GWY_TITLE=coverage threshold check" >> $GITHUB_ENV
+
+        # generate go test command
+        GWY_GO_COMMAND="go test ./... -coverprofile="$GWY_COVER" -covermode=atomic -coverpkg=./... ${{ inputs.test-flags }}"
         
         # run unit tests and generate coverage dump
-        GWY_GO_TEST="$(timeout $GWY_TIMEOUT_SECONDS go test ./... -coverprofile="$GWY_COVER" -covermode=atomic -coverpkg=./... 2>&1)"
+        GWY_GO_TEST="$($GWY_GO_COMMAND 2>&1)"
         echo "GWY_GO_TEST<<EOF" >> $GITHUB_ENV
         echo "$GWY_GO_TEST" >> $GITHUB_ENV
         echo "EOF" >> $GITHUB_ENV
